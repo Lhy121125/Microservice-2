@@ -2,15 +2,14 @@ from flask import Flask, request, jsonify
 import openai
 import os
 import boto3
-from boto3.dynamodb.conditions import Attr
-
+from boto3.dynamodb.conditions import Key
 
 # Initialize a DynamoDB client with Boto3
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_DEFAULT_REGION'))  # replace 'us-east-1' with your region
 
 
 # Reference your DynamoDB table
-table = dynamodb.Table('microservice2_cover_letter')
+table = dynamodb.Table('micro2_cv_template')
 
 
 app = Flask(__name__)
@@ -26,13 +25,13 @@ def root():  # put application's code here
     To be continued..."""
 
 
-@app.route('/generate_cover_letter', methods=['POST'])
-def generate_cover_letter():
+@app.route('/<user_id>/generate_cover_letter', methods=['POST'])
+def generate_cover_letter(user_id):
     # Parse "role" and "company" from the JSON body of the POST request
     data = request.json
     role = data.get('role')
     company = data.get('company')
-    name = data.get('name')
+    template_name = data.get('template_name')
 
     # Ensure that both "role" and "company" are provided
     if not role or not company:
@@ -43,7 +42,7 @@ def generate_cover_letter():
         # Call the OpenAI API to generate the cover letter
         response = openai.completions.create(
             model="gpt-3.5-turbo-instruct",
-            prompt=f"You are a professional career advisor. Please write a personalized cover letter for a {role} role at {company}. The response should be nicely formatted and easy to read",
+            prompt=f"You are a professional career advisor. Please write a personalized cover letter as a new grad from college for a {role} role at {company}. The response should be nicely formatted and easy to read",
             max_tokens=1024
         )
 
@@ -54,7 +53,8 @@ def generate_cover_letter():
         try:
             db_response = table.put_item(
                 Item={
-                    'cv_name': name,  # This should be a unique identifier for the item
+                    'user_id': user_id,  # This should be a unique identifier for each student
+                    'template_name': template_name,  # This should be a unique identifier for the item
                     'role': role,
                     'company': company,
                     'cover_letter': generated_text
@@ -72,72 +72,60 @@ def generate_cover_letter():
         # Handle general exceptions
         return jsonify({'error': str(e)}), 500
 
-from flask import request
 
-@app.route('/querycv', methods=['GET'])
-def get_query_items():
-    # Fetch query parameters
-    cv_name = request.args.get('cv_name')
-    role = request.args.get('role')
-    company = request.args.get('company')
-
-    # Build a filter expression based on provided arguments, use 'contains' for substring match
-    filter_expression = None
-    if cv_name:
-        filter_expression = Attr('cv_name').contains(cv_name)
-    if role:
-        if filter_expression:
-            filter_expression &= Attr('role').contains(role)
-        else:
-            filter_expression = Attr('role').contains(role)
-    if company:
-        if filter_expression:
-            filter_expression &= Attr('company').contains(company)
-        else:
-            filter_expression = Attr('company').contains(company)
-
-    # Perform the scan
-    if filter_expression:
-        response = table.scan(FilterExpression=filter_expression)
-    else:
-        return jsonify({'error': "Query Word Missing! You must provide at least ONE attribute for query!"}), 500
-
-    return jsonify(response['Items']), 200
-
-@app.route('/delete_cv', methods=['DELETE'])
-def delete_item():
-    cv_name = request.args.get('cv_name')
-
-    if not cv_name:
-        return jsonify({'error': 'cv_name is required!'}), 400
-
+@app.route('/<user_id>/querycv/<template_name>', methods=['GET'])
+def get_query_items(user_id,template_name):
     try:
+        # Query the DynamoDB table for the specified user_id and cv_name
+        response = table.query(
+            KeyConditionExpression=Key('user_id').eq(user_id) &Key('template_name').eq(template_name)
+        )
+
+        # Check if items were found
+        items = response.get('Items', [])
+        if not items:
+            return jsonify({'message': 'No items found for the provided user_id and template_name'}), 404
+
+        # Return the found items
+        return jsonify(items), 200
+
+    except Exception as e:
+        # Handle any exceptions that occur during the query
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/<user_id>/delete_cv/<template_name>', methods=['DELETE'])
+def delete_item(user_id,template_name):
+    try:
+        # Delete the item from the DynamoDB table
         response = table.delete_item(
             Key={
-                'cv_name': cv_name
+                'user_id': user_id,
+                'template_name': template_name
             }
         )
 
+        # Check the response status code
         if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-            return jsonify({'message': f'Item with cv_name {cv_name} deleted successfully.'}), 200
+            return jsonify({'message': f'Item with user_id {user_id} and template_name {template_name} deleted successfully.'}), 200
         else:
-            return jsonify({'error': f'Failed to delete item with cv_name {cv_name}.'}), 500
+            return jsonify({'error': 'Failed to delete item.'}), 500
 
     except Exception as e:
+        # Handle any exceptions that occur during deletion
         return jsonify({'error': str(e)}), 500
 
-@app.route('/update_template', methods=['PUT'])
-def update_cover_letter():
+@app.route('/<user_id>/update_template/<template_name>', methods=['PUT'])
+def update_cover_letter(user_id,template_name):
     data = request.json
-    cv_name = data.get('cv_name')
+
     new_company = data.get('new_company')  # User input for new company
 
-    if not cv_name or not new_company:
-        return jsonify({'error': 'cv_name and keyword1 (new company) are required'}), 400
+    if not new_company:
+        return jsonify({'error': 'new_company is required'}), 400
 
     # Get the existing item from DynamoDB
     try:
-        response = table.get_item(Key={'cv_name': cv_name})
+        response = table.get_item(Key={'user_id': user_id,'template_name': template_name})
         item = response.get('Item')
         if not item:
             return jsonify({'error': 'Item not found'}), 404
@@ -149,14 +137,14 @@ def update_cover_letter():
         # Call OpenAI API to generate a new cover letter
         openai_response = openai.completions.create(
             model="gpt-3.5-turbo-instruct",
-            prompt=f"You are a professional career advisor. Please write a personalized cover letter for the role of {existing_role} at {new_company}. The response should be nicely formatted and easy to read",
+            prompt=f"You are a professional career advisor. Please write a personalized cover letter as a new grad from college for the role of {existing_role} at {new_company}. The response should be nicely formatted and easy to read",
             max_tokens=1024
         )
         generated_text = openai_response.choices[0].text.strip()
 
         # Update the item in DynamoDB
         update_response = table.update_item(
-            Key={'cv_name': cv_name},
+            Key={'user_id':user_id,'template_name': template_name},
             UpdateExpression='SET cover_letter = :cover_letter, company = :new_company',
             ExpressionAttributeValues={
                 ':cover_letter': generated_text,
@@ -169,19 +157,38 @@ def update_cover_letter():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/get_all_cv', methods=['GET'])
-def get_all_items():
+@app.route('/<user_id>/get_all_cv', methods=['GET'])
+def get_all_items(user_id):
     try:
-        # Scan the table
-        response = table.scan()
+        # Query the DynamoDB table for items with the specified user_id
+        response = table.query(
+            KeyConditionExpression=Key('user_id').eq(user_id)
+        )
 
-        # Retrieve the items
         items = response.get('Items', [])
 
         return jsonify(items), 200
 
     except Exception as e:
+        # Handle any exceptions that occur during the query
         return jsonify({'error': str(e)}), 500
+
+@app.route('/<user_id>/get_template_count', methods=['GET'])
+def get_template_count(user_id):
+    try:
+        # Query the DynamoDB table for items with the specified user_id
+        response = table.query(
+            KeyConditionExpression=Key('user_id').eq(user_id)
+        )
+
+        items = response.get('Items', [])
+
+        return jsonify({'template_count': len(items)}), 200
+
+    except Exception as e:
+        # Handle any exceptions that occur during the query
+        return jsonify({'error': str(e)}), 500
+'''
 @app.route('/students', methods=['GET'])
 def getStudents():
     students = f"""
@@ -193,7 +200,7 @@ def getStudents():
     cs4206
     """
     return students
-
+'''
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=8080, debug=True)

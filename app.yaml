@@ -12,7 +12,7 @@ handlers:
     script: auto
 
 env_variables:
-  OPENAI_API_KEY: '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'
+  OPENAI_API_KEY: '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'
   AWS_ACCESS_KEY_ID: 'AKIARYL7VC4FBWND6VHG'
   AWS_SECRET_ACCESS_KEY: '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'
   AWS_DEFAULT_REGION: 'us-east-1'
