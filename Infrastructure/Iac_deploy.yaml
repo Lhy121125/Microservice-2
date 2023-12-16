@@ -1,0 +1,23 @@
+resources:
+- name: my-app-engine-app
+  type: appengine.v1.version
+  properties:
+    appsId: modular-granite-402517
+    servicesId: default
+    id: v1
+    runtime: python39
+    env: standard
+    instance_class: F1
+    deployment:
+      zip:
+        sourceUrl: "https://storage.googleapis.com/microservice_2_iac_deploy/micro2.zip"
+    env_variables:
+      OPENAI_API_KEY: 'YOUR OWN OPEN AI API KEY'
+      AWS_ACCESS_KEY_ID: 'AWS_ACCESS_KEY_ID'
+      AWS_SECRET_ACCESS_KEY: 'AWS_SECRET_ACCESS_KEY'
+      AWS_DEFAULT_REGION: 'us-east-1'
+    handlers:
+      - urlRegex: /static
+        staticFiles:
+          path: static
+          uploadPathRegex: static/.*
